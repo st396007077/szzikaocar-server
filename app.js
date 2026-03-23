@@ -286,24 +286,31 @@ app.post('/api/recalculateAmount', async (req, res) => {
       return res.json({ code: -1, msg: '密码错误' });
     }
 
-    const order = await Order.findOne({ orderId });
+    // 🔧 修复：支持按 真实ID/拼接订单ID 查找（兼容前端）
+    const order = await Order.findOne({ 
+      $or: [
+        { orderId: orderId },
+        { _id: orderId }
+      ]
+    });
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
     
     console.log(`🔄 开始刷新金额：订单 ${orderId}`);
-    console.log(`原始carList:`, JSON.stringify(order.carList, null, 2));
     
+    // 🔧 核心修复：取消初始值0，默认保留原有价格，仅重新计算正确价格
     const recalculatedCarList = (order.carList || []).map(item => {
       if (!item || typeof item !== 'object') {
         console.warn(`⚠️ 发现无效的班次项:`, item);
-        return { name: '未知班次', price: 0 };
+        return { name: '未知班次', price: item.price || 0 };
       }
       
       const newItem = { ...item };
-      const originalPrice = newItem.price || 0;
-      let calculatedPrice = 0;
+      const originalPrice = Number(newItem.price) || 0;
+      let calculatedPrice = originalPrice; // 🔧 修复：默认使用原有价格，不清零
       
+      // 仅匹配规则时重新计算，否则保留原价
       if (newItem.name && newItem.name.includes('中午考点更换')) {
         calculatedPrice = 1;
       } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
@@ -312,9 +319,6 @@ app.post('/api/recalculateAmount', async (req, res) => {
         const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
         const toPrice = SCHOOL_PRICE[newItem.to] || 0;
         calculatedPrice = Math.max(fromPrice, toPrice, 1);
-      } else {
-        console.warn(`⚠️ 订单 ${orderId} 的班次“${newItem.name}”无法匹配价格规则，将保留原价 ${originalPrice} 元。数据:`, JSON.stringify(newItem));
-        calculatedPrice = originalPrice;
       }
       
       newItem.price = calculatedPrice;
@@ -330,15 +334,11 @@ app.post('/api/recalculateAmount', async (req, res) => {
     
     console.log(`💰 订单 ${orderId} 重新计算总金额: ${order.total}元 -> ${newTotal}元`);
     
-    const originalIsManuallyModified = order.isManuallyModified;
-    
+    // 🔧 修复：保留手动修改状态，不重置
     order.total = newTotal;
     order.carList = recalculatedCarList;
-    order.isManuallyModified = originalIsManuallyModified;
     
     await order.save();
-    
-    console.log(`✅ 刷新金额成功：订单 ${orderId}，新金额 ${newTotal}元`);
     
     res.json({ 
       code: 0, 
