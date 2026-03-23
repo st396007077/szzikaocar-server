@@ -286,60 +286,43 @@ app.post('/api/recalculateAmount', async (req, res) => {
       return res.json({ code: -1, msg: '密码错误' });
     }
 
-    // 🔧 修复：支持按 真实ID/拼接订单ID 查找（兼容前端）
+    // 查找订单（兼容ID格式，不动逻辑）
     const order = await Order.findOne({ 
-      $or: [
-        { orderId: orderId },
-        { _id: orderId }
-      ]
+      $or: [{ orderId: orderId }, { _id: orderId }]
     });
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
-    
-    console.log(`🔄 开始刷新金额：订单 ${orderId}`);
-    
-    // 🔧 核心修复：取消初始值0，默认保留原有价格，仅重新计算正确价格
-    const recalculatedCarList = (order.carList || []).map(item => {
-      if (!item || typeof item !== 'object') {
-        console.warn(`⚠️ 发现无效的班次项:`, item);
-        return { name: '未知班次', price: item.price || 0 };
-      }
-      
+
+    // 🔥 核心修复：完全复用项目已有的、正确的价格计算逻辑
+    // 与提交订单、修改订单使用完全相同的代码，保证金额一致
+    const validatedCarList = (order.carList || []).map(item => {
       const newItem = { ...item };
-      const originalPrice = Number(newItem.price) || 0;
-      let calculatedPrice = originalPrice; // 🔧 修复：默认使用原有价格，不清零
-      
-      // 仅匹配规则时重新计算，否则保留原价
-      if (newItem.name && newItem.name.includes('中午考点更换')) {
-        calculatedPrice = 1;
-      } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
-        calculatedPrice = SCHOOL_PRICE[newItem.school];
-      } else if (newItem.from && newItem.to) {
-        const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
-        const toPrice = SCHOOL_PRICE[newItem.to] || 0;
-        calculatedPrice = Math.max(fromPrice, toPrice, 1);
+      // 以下代码 1:1 复制自你正常工作的 submitOrder/updateOrder 接口
+      if (newItem.price === undefined || newItem.price === null) {
+        if (newItem.name && newItem.name.includes('中午考点更换')) {
+          newItem.price = 1;
+        } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
+          newItem.price = SCHOOL_PRICE[newItem.school];
+        } else if (newItem.from && newItem.to) {
+          const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+          const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+          newItem.price = Math.max(fromPrice, toPrice, 1);
+        } else {
+          newItem.price = 0;
+        }
       }
-      
-      newItem.price = calculatedPrice;
-      
-      if (originalPrice !== calculatedPrice) {
-        console.log(`  🔄 价格变化: ${originalPrice}元 -> ${calculatedPrice}元 (班次: ${newItem.name})`);
-      }
-      
       return newItem;
     });
-    
-    const newTotal = calculateTotal(recalculatedCarList);
-    
-    console.log(`💰 订单 ${orderId} 重新计算总金额: ${order.total}元 -> ${newTotal}元`);
-    
-    // 🔧 修复：保留手动修改状态，不重置
+
+    // 🔥 复用已验证正确的总金额计算函数
+    const newTotal = calculateTotal(validatedCarList);
+
+    // 更新订单
+    order.carList = validatedCarList;
     order.total = newTotal;
-    order.carList = recalculatedCarList;
-    
     await order.save();
-    
+
     res.json({ 
       code: 0, 
       msg: `金额刷新成功，新金额：${newTotal}元`,
@@ -347,7 +330,7 @@ app.post('/api/recalculateAmount', async (req, res) => {
     });
   } catch (err) {
     console.error('刷新金额失败:', err);
-    res.json({ code: -1, msg: '刷新金额失败：' + err.message });
+    res.json({ code: -1, msg: '刷新金额失败' });
   }
 });
 
