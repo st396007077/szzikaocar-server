@@ -30,7 +30,7 @@ const orderSchema = new mongoose.Schema({
   total: { type: Number, required: true },
   carList: [{
     name: String,
-    price: { type: Number, default: 0 },  // 修复：改为Number类型，设置默认值0
+    price: { type: Number, default: 0 },
     school: String,
     from: String,
     to: String
@@ -46,12 +46,6 @@ const orderSchema = new mongoose.Schema({
   isManuallyModified: { type: Boolean, default: false },
   isMultiSubmit: { type: Boolean, default: false }
 });
-
-// ============= 🔥 关键修复：彻底移除所有自动标记中间件 =============
-// ❌ 已移除：orderSchema.pre('findOneAndUpdate', ...) 中间件
-// ❌ 已移除：orderSchema.pre('save', ...) 中间件
-// 原因：这些中间件会导致任何更新carList的操作（包括正常的用户提交）
-// 都被错误地标记为"手动修改"
 
 const Order = mongoose.model('Order', orderSchema);
 
@@ -103,7 +97,6 @@ async function connectToDatabase() {
   }
 }
 
-// 启动时连接数据库
 connectToDatabase();
 
 // ====================== 工具函数 ======================
@@ -119,22 +112,16 @@ function generateOrderId() {
 function calculateTotal(carList) {
   let total = 0;
   (carList || []).forEach(item => {
-    // 如果item已经有price字段，直接使用
     if (item.price !== undefined && item.price !== null) {
       total += Number(item.price) || 0;
     } else {
-      // 否则根据学校计算价格
       if (item.name && item.name.includes('中午考点更换')) {
-        // 中午考点更换固定1元
         total += 1;
-      } else if (item.school && SCHOOL_PRICE[item.school]) {
-        // 早送/晚接根据学校计算价格
+      } else if (item.school && SCHOOL_PRICE.hasOwnProperty(item.school)) { // 🔧 修复
         total += SCHOOL_PRICE[item.school];
       } else if (item.from && item.to) {
-        // 中午考点更换有两个学校的情况
         const fromPrice = SCHOOL_PRICE[item.from] || 0;
         const toPrice = SCHOOL_PRICE[item.to] || 0;
-        // 至少1元，取较高价格
         total += Math.max(fromPrice, toPrice, 1);
       }
     }
@@ -145,14 +132,12 @@ function calculateTotal(carList) {
 function mergeCarLists(oldList, newList) {
   const carMap = new Map();
   
-  // 处理旧订单列表
   oldList.forEach(car => { 
     if (car.name) {
-      // 如果老数据没有price字段，根据规则计算
       if (!car.price && car.price !== 0) {
         if (car.name.includes('中午考点更换')) {
           car.price = 1;
-        } else if (car.school && SCHOOL_PRICE[car.school]) {
+        } else if (car.school && SCHOOL_PRICE.hasOwnProperty(car.school)) { // 🔧 修复
           car.price = SCHOOL_PRICE[car.school];
         } else if (car.from && car.to) {
           const fromPrice = SCHOOL_PRICE[car.from] || 0;
@@ -164,14 +149,12 @@ function mergeCarLists(oldList, newList) {
     }
   });
   
-  // 处理新订单列表
   newList.forEach(car => { 
     if (car.name) {
-      // 如果新数据没有price字段，根据规则计算
       if (!car.price && car.price !== 0) {
         if (car.name.includes('中午考点更换')) {
           car.price = 1;
-        } else if (car.school && SCHOOL_PRICE[car.school]) {
+        } else if (car.school && SCHOOL_PRICE.hasOwnProperty(car.school)) { // 🔧 修复
           car.price = SCHOOL_PRICE[car.school];
         } else if (car.from && car.to) {
           const fromPrice = SCHOOL_PRICE[car.from] || 0;
@@ -205,7 +188,6 @@ app.post('/api/getAllOrders', async (req, res) => {
   }
 });
 
-// 🔥 修复：submitOrder接口 - 当用户再次提交时，重置手动修改标记
 app.post('/api/submitOrder', async (req, res) => {
   try {
     const { userName, userPhone, carList, payType, createTime } = req.body;
@@ -213,21 +195,19 @@ app.post('/api/submitOrder', async (req, res) => {
       return res.json({ code: -1, msg: '参数不全' });
     }
 
-    // 确保每个班次都有正确的价格
     const validatedCarList = (carList || []).map(item => {
       const newItem = { ...item };
-      // 如果item没有price字段，根据规则计算
       if (newItem.price === undefined || newItem.price === null) {
         if (newItem.name && newItem.name.includes('中午考点更换')) {
           newItem.price = 1;
-        } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
+        } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) { // 🔧 修复
           newItem.price = SCHOOL_PRICE[newItem.school];
         } else if (newItem.from && newItem.to) {
           const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
           const toPrice = SCHOOL_PRICE[newItem.to] || 0;
           newItem.price = Math.max(fromPrice, toPrice, 1);
         } else {
-          newItem.price = 0; // 默认值
+          newItem.price = 0;
         }
       }
       return newItem;
@@ -238,24 +218,19 @@ app.post('/api/submitOrder', async (req, res) => {
       const mergedCarList = mergeCarLists(existingOrder.carList || [], validatedCarList || []);
       const newTotal = calculateTotal(mergedCarList);
       
-      // 记录日志
       console.log(`✅ 合并订单：用户 ${userName}，原金额 ${existingOrder.total}，新金额 ${newTotal}`);
       
-      // 🔥 核心修改：无论原订单是否为手动修改，用户再次提交即视为正常操作
-      // 1. 将 isManuallyModified 重置为 false
-      // 2. 将 isMultiSubmit 设为 true (多次提交)
       existingOrder.total = newTotal;
       existingOrder.carList = mergedCarList;
       existingOrder.payType = payType;
       existingOrder.createTime = createTime;
       existingOrder.isMultiSubmit = true;
-      existingOrder.isManuallyModified = false; // 🆕 重置为"非手动修改"
+      existingOrder.isManuallyModified = false;
       existingOrder.paymentRecords.push({ payType, amount: newTotal, time: createTime });
       
       await existingOrder.save();
       return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
     } else {
-      // 首次提交
       const mergedCarList = mergeCarLists([], validatedCarList || []);
       const newTotal = calculateTotal(mergedCarList);
       const orderId = generateOrderId();
@@ -268,7 +243,7 @@ app.post('/api/submitOrder', async (req, res) => {
         payType, 
         createTime,
         isMultiSubmit: false,
-        isManuallyModified: false, // 新订单明确设置为false
+        isManuallyModified: false,
         payScreenshots: [],
         paymentRecords: [{ payType, amount: newTotal, time: createTime }]
       });
@@ -304,7 +279,6 @@ app.post('/api/uploadScreenshot', async (req, res) => {
   }
 });
 
-// 🔥 修复：recalculateAmount接口 - 确保正确处理历史数据
 app.post('/api/recalculateAmount', async (req, res) => {
   try {
     const { pwd, orderId } = req.body;
@@ -320,58 +294,46 @@ app.post('/api/recalculateAmount', async (req, res) => {
     console.log(`🔄 开始刷新金额：订单 ${orderId}`);
     console.log(`原始carList:`, JSON.stringify(order.carList, null, 2));
     
-// 🔧 修复后的价格计算逻辑 (替换 app.js 中对应的部分)
-const recalculatedCarList = (order.carList || []).map(item => {
-  // 1. 防止item为无效对象
-  if (!item || typeof item !== 'object') {
-    console.warn(`⚠️ 发现无效的班次项:`, item);
-    return { name: '未知班次', price: 0 };
-  }
-  
-  const newItem = { ...item };
-  const originalPrice = newItem.price || 0;
-  let calculatedPrice = 0;
-  
-  // 2. 根据班次类型和学校信息计算价格
-  if (newItem.name && newItem.name.includes('中午考点更换')) {
-    // 中午考点更换：固定1元
-    calculatedPrice = 1;
-  } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
-    // 普通班次（早送/晚接）：根据配置的价格表计算
-    calculatedPrice = SCHOOL_PRICE[newItem.school];
-  } else if (newItem.from && newItem.to) {
-    // 中午考点更换（双学校）：取两校价格较高者，至少1元
-    const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
-    const toPrice = SCHOOL_PRICE[newItem.to] || 0;
-    calculatedPrice = Math.max(fromPrice, toPrice, 1);
-  } else {
-    // 🚨 关键修复：当无法通过上述规则计算时，保留原始价格，而不是置零！
-    console.warn(`⚠️ 订单 ${orderId} 的班次“${newItem.name}”无法匹配价格规则，将保留原价 ${originalPrice} 元。数据:`, JSON.stringify(newItem));
-    calculatedPrice = originalPrice; // 保留原价，避免误清零
-  }
-  
-  // 3. 应用新计算的价格
-  newItem.price = calculatedPrice;
-  
-  // 4. 记录价格变化
-  if (originalPrice !== calculatedPrice) {
-    console.log(`  🔄 价格变化: ${originalPrice}元 -> ${calculatedPrice}元 (班次: ${newItem.name})`);
-  }
-  
-  return newItem;
-});
+    const recalculatedCarList = (order.carList || []).map(item => {
+      if (!item || typeof item !== 'object') {
+        console.warn(`⚠️ 发现无效的班次项:`, item);
+        return { name: '未知班次', price: 0 };
+      }
+      
+      const newItem = { ...item };
+      const originalPrice = newItem.price || 0;
+      let calculatedPrice = 0;
+      
+      if (newItem.name && newItem.name.includes('中午考点更换')) {
+        calculatedPrice = 1;
+      } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
+        calculatedPrice = SCHOOL_PRICE[newItem.school];
+      } else if (newItem.from && newItem.to) {
+        const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+        const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+        calculatedPrice = Math.max(fromPrice, toPrice, 1);
+      } else {
+        console.warn(`⚠️ 订单 ${orderId} 的班次“${newItem.name}”无法匹配价格规则，将保留原价 ${originalPrice} 元。数据:`, JSON.stringify(newItem));
+        calculatedPrice = originalPrice;
+      }
+      
+      newItem.price = calculatedPrice;
+      
+      if (originalPrice !== calculatedPrice) {
+        console.log(`  🔄 价格变化: ${originalPrice}元 -> ${calculatedPrice}元 (班次: ${newItem.name})`);
+      }
+      
+      return newItem;
+    });
     
     const newTotal = calculateTotal(recalculatedCarList);
     
     console.log(`💰 订单 ${orderId} 重新计算总金额: ${order.total}元 -> ${newTotal}元`);
     
-    // 🔥 关键修复：必须同时更新 carList 和 total
-    // 重新计算金额时，保持原有的手动修改状态
     const originalIsManuallyModified = order.isManuallyModified;
     
-    // 更新订单
     order.total = newTotal;
-    order.carList = recalculatedCarList;  // 🔥 必须更新 carList！
+    order.carList = recalculatedCarList;
     order.isManuallyModified = originalIsManuallyModified;
     
     await order.save();
@@ -420,7 +382,6 @@ app.get('/api/queryOrder', async (req, res) => {
   }
 });
 
-// 🔥 修复：修改订单数据接口 - 明确标记手动修改
 app.post('/api/updateOrder', async (req, res) => {
   try {
     const { pwd, orderId, updates } = req.body;
@@ -433,20 +394,17 @@ app.post('/api/updateOrder', async (req, res) => {
       return res.json({ code: -1, msg: '参数不全' });
     }
     
-    // 检查是否修改了 carList
     const isModifyingCarList = updates.carList !== undefined;
     
     const updateData = { ...updates };
     
     if (isModifyingCarList) {
-      // 确保修改的carList有正确的价格
       const validatedCarList = (updates.carList || []).map(item => {
         const newItem = { ...item };
-        // 如果item没有price字段，根据规则计算
         if (!newItem.price && newItem.price !== 0) {
           if (newItem.name && newItem.name.includes('中午考点更换')) {
             newItem.price = 1;
-          } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
+          } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) { // 🔧 修复
             newItem.price = SCHOOL_PRICE[newItem.school];
           } else if (newItem.from && newItem.to) {
             const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
@@ -459,11 +417,9 @@ app.post('/api/updateOrder', async (req, res) => {
       
       updateData.carList = validatedCarList;
       updateData.total = calculateTotal(validatedCarList);
-      // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
       updateData.isManuallyModified = true;
       console.log(`📝 订单 ${orderId} 被标记为手动修改 (通过updateOrder接口)`);
     } else {
-      // 如果更新了其他字段，保持原有的 isManuallyModified 状态
       const originalOrder = await Order.findOne({ orderId });
       if (originalOrder && originalOrder.isManuallyModified) {
         updateData.isManuallyModified = true;
@@ -492,7 +448,6 @@ app.post('/api/updateOrder', async (req, res) => {
   }
 });
 
-// 🔥 修复：修改单个班次接口 - 明确标记手动修改
 app.post('/api/updateCarItem', async (req, res) => {
   try {
     const { pwd, orderId, carIndex, updates } = req.body;
@@ -514,11 +469,10 @@ app.post('/api/updateCarItem', async (req, res) => {
       const oldCarItem = { ...order.carList[carIndex] };
       const newCarItem = { ...oldCarItem, ...updates };
       
-      // 确保更新后的班次有正确的价格
       if (!newCarItem.price && newCarItem.price !== 0) {
         if (newCarItem.name && newCarItem.name.includes('中午考点更换')) {
           newCarItem.price = 1;
-        } else if (newCarItem.school && SCHOOL_PRICE[newCarItem.school]) {
+        } else if (newCarItem.school && SCHOOL_PRICE.hasOwnProperty(newCarItem.school)) { // 🔧 修复
           newCarItem.price = SCHOOL_PRICE[newCarItem.school];
         } else if (newCarItem.from && newCarItem.to) {
           const fromPrice = SCHOOL_PRICE[newCarItem.from] || 0;
@@ -532,7 +486,6 @@ app.post('/api/updateCarItem', async (req, res) => {
       const hasChanged = JSON.stringify(oldCarItem) !== JSON.stringify(newCarItem);
       
       if (hasChanged) {
-        // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
         order.isManuallyModified = true;
         order.total = calculateTotal(order.carList);
         console.log(`📝 订单 ${orderId} 被标记为手动修改 (通过updateCarItem接口)`);
@@ -556,7 +509,6 @@ app.post('/api/updateCarItem', async (req, res) => {
   }
 });
 
-// 调试接口：查看订单详情
 app.post('/api/debugOrder', async (req, res) => {
   try {
     const { pwd, orderId } = req.body;
@@ -569,7 +521,6 @@ app.post('/api/debugOrder', async (req, res) => {
       return res.json({ code: -1, msg: '订单不存在' });
     }
     
-    // 重新计算金额
     const recalculated = calculateTotal(order.carList);
     
     res.json({ 
@@ -588,54 +539,13 @@ app.post('/api/debugOrder', async (req, res) => {
 
 app.get('/debug-db', (req, res) => {
   const uri = process.env.MONGODB_URI;
-  // 安全地显示连接信息（隐藏密码）
   const maskedUri = uri.replace(/:(.*?)@/, ':****@');
   res.json({
     message: '当前数据库连接信息',
     database: maskedUri,
-    // 或者只提取数据库名
     databaseName: uri.split('/').pop().split('?')[0]
   });
 });
-
-// ====================== 🔥 新增：数据库修复接口（临时使用） ======================
-// ⚠️ 警告：此接口仅供一次性修复使用，修复完成后请立即从代码中删除
-// app.post('/api/fixDatabaseManualFlags', async (req, res) => {
-//   try {
-//     const { pwd, confirm } = req.body;
-    
-//     if (pwd !== process.env.ADMIN_PWD) {
-//       return res.json({ code: -1, msg: '密码错误' });
-//     }
-    
-//     if (confirm !== 'YES_I_UNDERSTAND') {
-//       return res.json({ 
-//         code: -1, 
-//         msg: '请确认操作：此操作将重置所有订单的"手动修改"标记。确认请在请求体中添加 confirm: "YES_I_UNDERSTAND"' 
-//       });
-//     }
-    
-//     console.log('⚠️ 开始修复数据库：重置所有订单的 isManuallyModified 为 false');
-    
-//     // 重置所有订单的 isManuallyModified 为 false
-//     const result = await Order.updateMany(
-//       {},
-//       { $set: { isManuallyModified: false } }
-//     );
-    
-//     console.log(`✅ 修复完成：已重置 ${result.modifiedCount} 个订单的标记`);
-    
-//     res.json({ 
-//       code: 0, 
-//       msg: `修复完成，已重置 ${result.modifiedCount} 个订单的 isManuallyModified 为 false`,
-//       modifiedCount: result.modifiedCount
-//     });
-    
-//   } catch (err) {
-//     console.error('修复数据库失败:', err);
-//     res.json({ code: -1, msg: '修复失败' });
-//   }
-// });
 
 // ====================== 健康检查接口 ======================
 app.get('/', (req, res) => {
@@ -666,7 +576,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 处理 404
 app.use((req, res) => {
   res.status(404).json({ code: -1, msg: '接口不存在' });
 });
@@ -680,12 +589,10 @@ if (!process.env.MONGODB_URI) {
   process.exit(1);
 }
 
-// 延迟启动，确保数据库连接
 setTimeout(() => {
   app.listen(PORT, () => {
     console.log(`✅ 服务器运行在端口 ${PORT}`);
     console.log(`📁 数据库连接状态: ${mongoose.connection.readyState === 1 ? '已连接' : '未连接'}`);
     console.log(`🌍 访问地址: http://localhost:${PORT}`);
-    console.log('🔧 修复说明：已彻底移除有问题的中间件，精确控制手动修改标记');
   });
 }, 1000);
