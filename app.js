@@ -317,15 +317,6 @@ app.post('/api/recalculateAmount', async (req, res) => {
       return res.json({ code: -1, msg: '订单不存在' });
     }
     
-    // 🔥 核心修复：检查订单carList是否存在
-    if (!order.carList || !Array.isArray(order.carList) || order.carList.length === 0) {
-      return res.json({ 
-        code: -1, 
-        msg: '订单没有班次信息，无法刷新金额',
-        orderId: orderId
-      });
-    }
-    
     console.log(`🔄 开始刷新金额：订单 ${orderId}`);
     console.log(`原始carList:`, JSON.stringify(order.carList, null, 2));
     
@@ -340,7 +331,7 @@ app.post('/api/recalculateAmount', async (req, res) => {
       }
       
       // 记录原始信息以便调试
-      const originalItem = JSON.parse(JSON.stringify(newItem));
+      const originalPrice = newItem.price || 0;
       
       // 根据学校重新计算价格
       if (newItem.name && newItem.name.includes('中午考点更换')) {
@@ -351,17 +342,9 @@ app.post('/api/recalculateAmount', async (req, res) => {
           newItem.price = SCHOOL_PRICE[newItem.school];
           console.log(`  - ${newItem.name} (${newItem.school}): 价格${newItem.price}元`);
         } else {
-          // 学校不在配置中，尝试查找近似匹配
-          const matchedSchool = Object.keys(SCHOOL_PRICE).find(key => 
-            key.includes(newItem.school) || newItem.school.includes(key)
-          );
-          if (matchedSchool) {
-            newItem.price = SCHOOL_PRICE[matchedSchool];
-            console.log(`  - ${newItem.name} (${newItem.school} -> ${matchedSchool}): 价格${newItem.price}元`);
-          } else {
-            newItem.price = 0;
-            console.warn(`  - ${newItem.name}: 学校"${newItem.school}"不在价格配置中，价格设为0元`);
-          }
+          // 学校不在配置中
+          newItem.price = 0;
+          console.warn(`  - ${newItem.name}: 学校"${newItem.school}"不在价格配置中，价格设为0元`);
         }
       } else if (newItem.from && newItem.to) {
         const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
@@ -374,8 +357,8 @@ app.post('/api/recalculateAmount', async (req, res) => {
       }
       
       // 如果价格有变化，记录日志
-      if (originalItem.price !== newItem.price) {
-        console.log(`  🔄 价格变化: ${originalItem.price || 0}元 -> ${newItem.price}元`);
+      if (originalPrice !== newItem.price) {
+        console.log(`  🔄 价格变化: ${originalPrice || 0}元 -> ${newItem.price}元`);
       }
       
       return newItem;
@@ -385,12 +368,13 @@ app.post('/api/recalculateAmount', async (req, res) => {
     
     console.log(`💰 订单 ${orderId} 重新计算总金额: ${order.total}元 -> ${newTotal}元`);
     
+    // 🔥 关键修复：必须同时更新 carList 和 total
     // 重新计算金额时，保持原有的手动修改状态
     const originalIsManuallyModified = order.isManuallyModified;
     
     // 更新订单
     order.total = newTotal;
-    order.carList = recalculatedCarList;
+    order.carList = recalculatedCarList;  // 🔥 必须更新 carList！
     order.isManuallyModified = originalIsManuallyModified;
     
     await order.save();
