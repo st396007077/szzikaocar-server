@@ -14,7 +14,6 @@ const SCHOOL_PRICE = {
   '绣水中学': 15,      // 绣水中学价格：15元
   '章丘实验小学': 15,      // 章丘实验小学价格：15元
   '章丘实验中学': 15,      // 章丘实验中学价格：15元
-  '章丘实验中学': 15,      // 章丘实验中学价格：15元
   '章丘第二实验中学': 15,  // 章丘第二实验中学价格：15元
   '章丘鲁能实验小学': 15,  // 章丘鲁能实验小学价格：15元
   '中等职业学校': 15,   // 中等职业学校价格：15元
@@ -126,7 +125,7 @@ function calculateTotal(carList) {
     } else {
       // 否则根据学校计算价格
       if (item.name && item.name.includes('中午考点更换')) {
-        // 中午考点更换固定3元
+        // 中午考点更换固定1元
         total += 1;
       } else if (item.school && SCHOOL_PRICE[item.school]) {
         // 早送/晚接根据学校计算价格
@@ -135,7 +134,7 @@ function calculateTotal(carList) {
         // 中午考点更换有两个学校的情况
         const fromPrice = SCHOOL_PRICE[item.from] || 0;
         const toPrice = SCHOOL_PRICE[item.to] || 0;
-        // 至少3元，取较高价格
+        // 至少1元，取较高价格
         total += Math.max(fromPrice, toPrice, 1);
       }
     }
@@ -152,13 +151,13 @@ function mergeCarLists(oldList, newList) {
       // 如果老数据没有price字段，根据规则计算
       if (!car.price && car.price !== 0) {
         if (car.name.includes('中午考点更换')) {
-          car.price = 3;
+          car.price = 1;
         } else if (car.school && SCHOOL_PRICE[car.school]) {
           car.price = SCHOOL_PRICE[car.school];
         } else if (car.from && car.to) {
           const fromPrice = SCHOOL_PRICE[car.from] || 0;
           const toPrice = SCHOOL_PRICE[car.to] || 0;
-          car.price = Math.max(fromPrice, toPrice, 3);
+          car.price = Math.max(fromPrice, toPrice, 1);
         }
       }
       carMap.set(car.name, car); 
@@ -171,13 +170,13 @@ function mergeCarLists(oldList, newList) {
       // 如果新数据没有price字段，根据规则计算
       if (!car.price && car.price !== 0) {
         if (car.name.includes('中午考点更换')) {
-          car.price = 3;
+          car.price = 1;
         } else if (car.school && SCHOOL_PRICE[car.school]) {
           car.price = SCHOOL_PRICE[car.school];
         } else if (car.from && car.to) {
           const fromPrice = SCHOOL_PRICE[car.from] || 0;
           const toPrice = SCHOOL_PRICE[car.to] || 0;
-          car.price = Math.max(fromPrice, toPrice, 3);
+          car.price = Math.max(fromPrice, toPrice, 1);
         }
       }
       carMap.set(car.name, car); 
@@ -220,13 +219,13 @@ app.post('/api/submitOrder', async (req, res) => {
       // 如果item没有price字段，根据规则计算
       if (!newItem.price && newItem.price !== 0) {
         if (newItem.name && newItem.name.includes('中午考点更换')) {
-          newItem.price = 3;
+          newItem.price = 1;
         } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
           newItem.price = SCHOOL_PRICE[newItem.school];
         } else if (newItem.from && newItem.to) {
           const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
           const toPrice = SCHOOL_PRICE[newItem.to] || 0;
-          newItem.price = Math.max(fromPrice, toPrice, 3);
+          newItem.price = Math.max(fromPrice, toPrice, 1);
         }
       }
       return newItem;
