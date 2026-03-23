@@ -9,6 +9,20 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// ====================== 学校价格配置（与前端的 SCHOOL_PRICE 保持一致） ======================
+const SCHOOL_PRICE = {
+  '绣水中学': 15,      // 绣水中学价格：15元
+  '章丘实验小学': 15,      // 章丘实验小学价格：15元
+  '章丘实验中学': 15,      // 章丘实验中学价格：15元
+  '章丘实验中学': 15,      // 章丘实验中学价格：15元
+  '章丘第二实验中学': 15,  // 章丘第二实验中学价格：15元
+  '章丘鲁能实验小学': 15,  // 章丘鲁能实验小学价格：15元
+  '中等职业学校': 15,   // 中等职业学校价格：15元
+  '济南六里山小学': 17,   // 济南六里山小学价格：17元
+  '济南槐荫中学': 17,   // 济南槐荫中学价格：17元
+  '济南育贤中学': 17,   // 济南育贤中学价格：17元
+};
+
 // ====================== MongoDB 模型定义 ======================
 const orderSchema = new mongoose.Schema({
   orderId: { type: String, unique: true, required: true },
@@ -106,15 +120,70 @@ function generateOrderId() {
 function calculateTotal(carList) {
   let total = 0;
   (carList || []).forEach(item => {
-    total += Number(item.price) || 0;
+    // 如果item已经有price字段，直接使用
+    if (item.price !== undefined && item.price !== null) {
+      total += Number(item.price) || 0;
+    } else {
+      // 否则根据学校计算价格
+      if (item.name && item.name.includes('中午考点更换')) {
+        // 中午考点更换固定3元
+        total += 1;
+      } else if (item.school && SCHOOL_PRICE[item.school]) {
+        // 早送/晚接根据学校计算价格
+        total += SCHOOL_PRICE[item.school];
+      } else if (item.from && item.to) {
+        // 中午考点更换有两个学校的情况
+        const fromPrice = SCHOOL_PRICE[item.from] || 0;
+        const toPrice = SCHOOL_PRICE[item.to] || 0;
+        // 至少3元，取较高价格
+        total += Math.max(fromPrice, toPrice, 1);
+      }
+    }
   });
   return total;
 }
 
 function mergeCarLists(oldList, newList) {
   const carMap = new Map();
-  oldList.forEach(car => { if (car.name) carMap.set(car.name, car); });
-  newList.forEach(car => { if (car.name) carMap.set(car.name, car); });
+  
+  // 处理旧订单列表
+  oldList.forEach(car => { 
+    if (car.name) {
+      // 如果老数据没有price字段，根据规则计算
+      if (!car.price && car.price !== 0) {
+        if (car.name.includes('中午考点更换')) {
+          car.price = 3;
+        } else if (car.school && SCHOOL_PRICE[car.school]) {
+          car.price = SCHOOL_PRICE[car.school];
+        } else if (car.from && car.to) {
+          const fromPrice = SCHOOL_PRICE[car.from] || 0;
+          const toPrice = SCHOOL_PRICE[car.to] || 0;
+          car.price = Math.max(fromPrice, toPrice, 3);
+        }
+      }
+      carMap.set(car.name, car); 
+    }
+  });
+  
+  // 处理新订单列表
+  newList.forEach(car => { 
+    if (car.name) {
+      // 如果新数据没有price字段，根据规则计算
+      if (!car.price && car.price !== 0) {
+        if (car.name.includes('中午考点更换')) {
+          car.price = 3;
+        } else if (car.school && SCHOOL_PRICE[car.school]) {
+          car.price = SCHOOL_PRICE[car.school];
+        } else if (car.from && car.to) {
+          const fromPrice = SCHOOL_PRICE[car.from] || 0;
+          const toPrice = SCHOOL_PRICE[car.to] || 0;
+          car.price = Math.max(fromPrice, toPrice, 3);
+        }
+      }
+      carMap.set(car.name, car); 
+    }
+  });
+  
   const FIXED_CAR_ORDER = [
     '4月11日早送','4月11日晚接','4月12日早送','4月12日晚接',
     '4月11日中午考点更换','4月12日中午考点更换'
@@ -145,9 +214,27 @@ app.post('/api/submitOrder', async (req, res) => {
       return res.json({ code: -1, msg: '参数不全' });
     }
 
+    // 确保每个班次都有正确的价格
+    const validatedCarList = (carList || []).map(item => {
+      const newItem = { ...item };
+      // 如果item没有price字段，根据规则计算
+      if (!newItem.price && newItem.price !== 0) {
+        if (newItem.name && newItem.name.includes('中午考点更换')) {
+          newItem.price = 3;
+        } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
+          newItem.price = SCHOOL_PRICE[newItem.school];
+        } else if (newItem.from && newItem.to) {
+          const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+          const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+          newItem.price = Math.max(fromPrice, toPrice, 3);
+        }
+      }
+      return newItem;
+    });
+
     const existingOrder = await Order.findOne({ userName, userPhone });
     if (existingOrder) {
-      const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
+      const mergedCarList = mergeCarLists(existingOrder.carList || [], validatedCarList || []);
       const newTotal = calculateTotal(mergedCarList);
       
       // 🔥 核心修改：无论原订单是否为手动修改，用户再次提交即视为正常操作
@@ -158,14 +245,14 @@ app.post('/api/submitOrder', async (req, res) => {
       existingOrder.payType = payType;
       existingOrder.createTime = createTime;
       existingOrder.isMultiSubmit = true;
-      existingOrder.isManuallyModified = false; // 🆕 重置为“非手动修改”
+      existingOrder.isManuallyModified = false; // 🆕 重置为"非手动修改"
       existingOrder.paymentRecords.push({ payType, amount: newTotal, time: createTime });
       
       await existingOrder.save();
       return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
     } else {
-      // 首次提交的逻辑不变...
-      const mergedCarList = mergeCarLists([], carList || []);
+      // 首次提交
+      const mergedCarList = mergeCarLists([], validatedCarList || []);
       const newTotal = calculateTotal(mergedCarList);
       const orderId = generateOrderId();
       const newOrder = new Order({
@@ -221,11 +308,29 @@ app.post('/api/recalculateAmount', async (req, res) => {
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
-    const newTotal = calculateTotal(order.carList);
+    
+    // 重新计算每个班次的价格
+    const recalculatedCarList = (order.carList || []).map(item => {
+      const newItem = { ...item };
+      // 根据学校重新计算价格
+      if (newItem.name && newItem.name.includes('中午考点更换')) {
+        newItem.price = 1;
+      } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
+        newItem.price = SCHOOL_PRICE[newItem.school];
+      } else if (newItem.from && newItem.to) {
+        const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+        const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+        newItem.price = Math.max(fromPrice, toPrice, 1);
+      }
+      return newItem;
+    });
+    
+    const newTotal = calculateTotal(recalculatedCarList);
     
     // 重新计算金额时，保持原有的手动修改状态
     const originalIsManuallyModified = order.isManuallyModified;
     order.total = newTotal;
+    order.carList = recalculatedCarList;
     order.isManuallyModified = originalIsManuallyModified;
     
     await order.save();
@@ -286,7 +391,26 @@ app.post('/api/updateOrder', async (req, res) => {
     const updateData = { ...updates };
     
     if (isModifyingCarList) {
-      updateData.total = calculateTotal(updates.carList);
+      // 确保修改的carList有正确的价格
+      const validatedCarList = (updates.carList || []).map(item => {
+        const newItem = { ...item };
+        // 如果item没有price字段，根据规则计算
+        if (!newItem.price && newItem.price !== 0) {
+          if (newItem.name && newItem.name.includes('中午考点更换')) {
+            newItem.price = 1;
+          } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
+            newItem.price = SCHOOL_PRICE[newItem.school];
+          } else if (newItem.from && newItem.to) {
+            const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+            const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+            newItem.price = Math.max(fromPrice, toPrice, 1);
+          }
+        }
+        return newItem;
+      });
+      
+      updateData.carList = validatedCarList;
+      updateData.total = calculateTotal(validatedCarList);
       // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
       updateData.isManuallyModified = true;
       console.log(`📝 订单 ${orderId} 被标记为手动修改 (通过updateOrder接口)`);
@@ -340,9 +464,24 @@ app.post('/api/updateCarItem', async (req, res) => {
     
     if (order.carList && order.carList[carIndex]) {
       const oldCarItem = { ...order.carList[carIndex] };
-      order.carList[carIndex] = { ...oldCarItem, ...updates };
+      const newCarItem = { ...oldCarItem, ...updates };
       
-      const hasChanged = JSON.stringify(oldCarItem) !== JSON.stringify(order.carList[carIndex]);
+      // 确保更新后的班次有正确的价格
+      if (!newCarItem.price && newCarItem.price !== 0) {
+        if (newCarItem.name && newCarItem.name.includes('中午考点更换')) {
+          newCarItem.price = 1;
+        } else if (newCarItem.school && SCHOOL_PRICE[newCarItem.school]) {
+          newCarItem.price = SCHOOL_PRICE[newCarItem.school];
+        } else if (newCarItem.from && newCarItem.to) {
+          const fromPrice = SCHOOL_PRICE[newCarItem.from] || 0;
+          const toPrice = SCHOOL_PRICE[newCarItem.to] || 0;
+          newCarItem.price = Math.max(fromPrice, toPrice, 1);
+        }
+      }
+      
+      order.carList[carIndex] = newCarItem;
+      
+      const hasChanged = JSON.stringify(oldCarItem) !== JSON.stringify(newCarItem);
       
       if (hasChanged) {
         // 🔥 关键修复：只有通过后台修改接口更新carList，才标记为手动修改
