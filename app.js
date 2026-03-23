@@ -30,7 +30,7 @@ const orderSchema = new mongoose.Schema({
   total: { type: Number, required: true },
   carList: [{
     name: String,
-    price: String,
+    price: { type: Number, default: 0 },  // 修复：改为Number类型，设置默认值0
     school: String,
     from: String,
     to: String
@@ -217,7 +217,7 @@ app.post('/api/submitOrder', async (req, res) => {
     const validatedCarList = (carList || []).map(item => {
       const newItem = { ...item };
       // 如果item没有price字段，根据规则计算
-      if (!newItem.price && newItem.price !== 0) {
+      if (newItem.price === undefined || newItem.price === null) {
         if (newItem.name && newItem.name.includes('中午考点更换')) {
           newItem.price = 1;
         } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
@@ -226,6 +226,8 @@ app.post('/api/submitOrder', async (req, res) => {
           const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
           const toPrice = SCHOOL_PRICE[newItem.to] || 0;
           newItem.price = Math.max(fromPrice, toPrice, 1);
+        } else {
+          newItem.price = 0; // 默认值
         }
       }
       return newItem;
@@ -235,6 +237,9 @@ app.post('/api/submitOrder', async (req, res) => {
     if (existingOrder) {
       const mergedCarList = mergeCarLists(existingOrder.carList || [], validatedCarList || []);
       const newTotal = calculateTotal(mergedCarList);
+      
+      // 记录日志
+      console.log(`✅ 合并订单：用户 ${userName}，原金额 ${existingOrder.total}，新金额 ${newTotal}`);
       
       // 🔥 核心修改：无论原订单是否为手动修改，用户再次提交即视为正常操作
       // 1. 将 isManuallyModified 重置为 false
@@ -268,6 +273,9 @@ app.post('/api/submitOrder', async (req, res) => {
         paymentRecords: [{ payType, amount: newTotal, time: createTime }]
       });
       await newOrder.save();
+      
+      console.log(`✅ 新订单创建：订单 ${orderId}，金额 ${newTotal}元`);
+      
       return res.json({ code: 0, msg: '提交成功', orderId });
     }
   } catch (err) {
@@ -296,6 +304,7 @@ app.post('/api/uploadScreenshot', async (req, res) => {
   }
 });
 
+// 🔥 修复：recalculateAmount接口 - 确保正确处理历史数据
 app.post('/api/recalculateAmount', async (req, res) => {
   try {
     const { pwd, orderId } = req.body;
@@ -311,16 +320,24 @@ app.post('/api/recalculateAmount', async (req, res) => {
     // 重新计算每个班次的价格
     const recalculatedCarList = (order.carList || []).map(item => {
       const newItem = { ...item };
-      // 根据学校重新计算价格
-      if (newItem.name && newItem.name.includes('中午考点更换')) {
-        newItem.price = 1;
-      } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
-        newItem.price = SCHOOL_PRICE[newItem.school];
-      } else if (newItem.from && newItem.to) {
-        const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
-        const toPrice = SCHOOL_PRICE[newItem.to] || 0;
-        newItem.price = Math.max(fromPrice, toPrice, 1);
+      
+      // 确保转换为对象
+      if (newItem && typeof newItem === 'object') {
+        // 根据学校重新计算价格
+        if (newItem.name && newItem.name.includes('中午考点更换')) {
+          newItem.price = 1;
+        } else if (newItem.school && SCHOOL_PRICE[newItem.school]) {
+          newItem.price = SCHOOL_PRICE[newItem.school];
+        } else if (newItem.from && newItem.to) {
+          const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+          const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+          newItem.price = Math.max(fromPrice, toPrice, 1);
+        } else if (!newItem.price) {
+          // 如果没有学校信息也没有price字段，设置为0
+          newItem.price = 0;
+        }
       }
+      
       return newItem;
     });
     
@@ -328,15 +345,25 @@ app.post('/api/recalculateAmount', async (req, res) => {
     
     // 重新计算金额时，保持原有的手动修改状态
     const originalIsManuallyModified = order.isManuallyModified;
+    
+    // 更新订单
     order.total = newTotal;
     order.carList = recalculatedCarList;
     order.isManuallyModified = originalIsManuallyModified;
     
     await order.save();
-    res.json({ code: 0, msg: `金额刷新成功，新金额：${newTotal}元` });
+    
+    // 记录日志以便调试
+    console.log(`✅ 刷新金额成功：订单 ${orderId}，新金额 ${newTotal}元`);
+    
+    res.json({ 
+      code: 0, 
+      msg: `金额刷新成功，新金额：${newTotal}元`,
+      newTotal: newTotal
+    });
   } catch (err) {
     console.error('刷新金额失败:', err);
-    res.json({ code: -1, msg: '刷新金额失败' });
+    res.json({ code: -1, msg: '刷新金额失败：' + err.message });
   }
 });
 
@@ -504,6 +531,36 @@ app.post('/api/updateCarItem', async (req, res) => {
   } catch (err) {
     console.error('更新班次失败:', err);
     res.json({ code: -1, msg: '更新班次失败' });
+  }
+});
+
+// 调试接口：查看订单详情
+app.post('/api/debugOrder', async (req, res) => {
+  try {
+    const { pwd, orderId } = req.body;
+    if (pwd !== process.env.ADMIN_PWD) {
+      return res.json({ code: -1, msg: '密码错误' });
+    }
+
+    const order = await Order.findOne({ orderId });
+    if (!order) {
+      return res.json({ code: -1, msg: '订单不存在' });
+    }
+    
+    // 重新计算金额
+    const recalculated = calculateTotal(order.carList);
+    
+    res.json({ 
+      code: 0, 
+      data: {
+        order,
+        recalculatedTotal: recalculated,
+        carListDetails: order.carList || []
+      }
+    });
+  } catch (err) {
+    console.error('调试接口失败:', err);
+    res.json({ code: -1, msg: '调试失败' });
   }
 });
 
