@@ -137,7 +137,7 @@ app.post('/api/getAllOrders', async (req, res) => {
   }
 });
 
-// 修复：submitOrder接口 - 直接使用前端传入的total，与前端金额完全一致
+// 🔥 核心修复：多次提交/追加班次时，自动计算合并后所有班次的总金额
 app.post('/api/submitOrder', async (req, res) => {
   try {
     const { userName, userPhone, carList, payType, createTime, total } = req.body;
@@ -148,32 +148,36 @@ app.post('/api/submitOrder', async (req, res) => {
     const existingOrder = await Order.findOne({ userName, userPhone });
     if (existingOrder) {
       const mergedCarList = mergeCarLists(existingOrder.carList || [], carList || []);
+      // ✅ 修复：合并班次后，重新计算【所有班次总金额】，不再使用单次提交金额
+      const mergedTotal = calculateTotal(mergedCarList);
       
-      existingOrder.total = total;
+      existingOrder.total = mergedTotal;
       existingOrder.carList = mergedCarList;
       existingOrder.payType = payType;
       existingOrder.createTime = createTime;
       existingOrder.isMultiSubmit = true;
       existingOrder.isManuallyModified = false;
-      existingOrder.paymentRecords.push({ payType, amount: total, time: createTime });
+      existingOrder.paymentRecords.push({ payType, amount: mergedTotal, time: createTime });
       
       await existingOrder.save();
       return res.json({ code: 0, msg: '提交成功（合并到原有订单）', orderId: existingOrder.orderId });
     } else {
       const mergedCarList = mergeCarLists([], carList || []);
+      // ✅ 修复：首次提交也使用合并计算的金额，保证前后统一
+      const newTotal = calculateTotal(mergedCarList);
       const orderId = generateOrderId();
       const newOrder = new Order({
         orderId, 
         userName, 
         userPhone, 
-        total,
+        total: newTotal,
         carList: mergedCarList, 
         payType, 
         createTime,
         isMultiSubmit: false,
         isManuallyModified: false,
         payScreenshots: [],
-        paymentRecords: [{ payType, amount: total, time: createTime }]
+        paymentRecords: [{ payType, amount: newTotal, time: createTime }]
       });
       await newOrder.save();
       return res.json({ code: 0, msg: '提交成功', orderId });
@@ -184,7 +188,7 @@ app.post('/api/submitOrder', async (req, res) => {
   }
 });
 
-// 上传截图：移除去重，允许重复上传
+// 上传截图：允许重复上传（保留你的要求，无去重）
 app.post('/api/uploadScreenshot', async (req, res) => {
   try {
     const { orderId, screenshots } = req.body;
@@ -196,7 +200,7 @@ app.post('/api/uploadScreenshot', async (req, res) => {
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
-    // 🔥 已删除去重逻辑，直接追加，允许重复截图
+    // 直接追加，允许重复截图
     order.payScreenshots.push(...screenshots);
     await order.save();
     res.json({ code: 0, msg: '截图上传成功' });
