@@ -412,7 +412,7 @@ app.post('/api/updateCarItem', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({ 
     status: 'ok', 
-    message: '山青院专车订单管理系统 API 运行正常',
+    message: '商职专车订单管理系统 API 运行正常',
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });
