@@ -320,49 +320,46 @@ app.post('/api/recalculateAmount', async (req, res) => {
     console.log(`🔄 开始刷新金额：订单 ${orderId}`);
     console.log(`原始carList:`, JSON.stringify(order.carList, null, 2));
     
-    // 重新计算每个班次的价格
-    const recalculatedCarList = (order.carList || []).map(item => {
-      const newItem = { ...item };
-      
-      // 🔥 关键修复：确保item是有效对象
-      if (!newItem || typeof newItem !== 'object') {
-        console.warn(`⚠️ 发现无效的班次项:`, newItem);
-        return { name: '未知班次', price: 0 };
-      }
-      
-      // 记录原始信息以便调试
-      const originalPrice = newItem.price || 0;
-      
-      // 根据学校重新计算价格
-      if (newItem.name && newItem.name.includes('中午考点更换')) {
-        newItem.price = 1;
-        console.log(`  - ${newItem.name}: 固定价格1元`);
-      } else if (newItem.school) {
-        if (SCHOOL_PRICE[newItem.school]) {
-          newItem.price = SCHOOL_PRICE[newItem.school];
-          console.log(`  - ${newItem.name} (${newItem.school}): 价格${newItem.price}元`);
-        } else {
-          // 学校不在配置中
-          newItem.price = 0;
-          console.warn(`  - ${newItem.name}: 学校"${newItem.school}"不在价格配置中，价格设为0元`);
-        }
-      } else if (newItem.from && newItem.to) {
-        const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
-        const toPrice = SCHOOL_PRICE[newItem.to] || 0;
-        newItem.price = Math.max(fromPrice, toPrice, 1);
-        console.log(`  - ${newItem.name} (${newItem.from}→${newItem.to}): 价格${newItem.price}元`);
-      } else if (!newItem.price && newItem.price !== 0) {
-        newItem.price = 0;
-        console.warn(`  - ${newItem.name}: 无学校信息，价格设为0元`);
-      }
-      
-      // 如果价格有变化，记录日志
-      if (originalPrice !== newItem.price) {
-        console.log(`  🔄 价格变化: ${originalPrice || 0}元 -> ${newItem.price}元`);
-      }
-      
-      return newItem;
-    });
+// 🔧 修复后的价格计算逻辑 (替换 app.js 中对应的部分)
+const recalculatedCarList = (order.carList || []).map(item => {
+  // 1. 防止item为无效对象
+  if (!item || typeof item !== 'object') {
+    console.warn(`⚠️ 发现无效的班次项:`, item);
+    return { name: '未知班次', price: 0 };
+  }
+  
+  const newItem = { ...item };
+  const originalPrice = newItem.price || 0;
+  let calculatedPrice = 0;
+  
+  // 2. 根据班次类型和学校信息计算价格
+  if (newItem.name && newItem.name.includes('中午考点更换')) {
+    // 中午考点更换：固定1元
+    calculatedPrice = 1;
+  } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
+    // 普通班次（早送/晚接）：根据配置的价格表计算
+    calculatedPrice = SCHOOL_PRICE[newItem.school];
+  } else if (newItem.from && newItem.to) {
+    // 中午考点更换（双学校）：取两校价格较高者，至少1元
+    const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
+    const toPrice = SCHOOL_PRICE[newItem.to] || 0;
+    calculatedPrice = Math.max(fromPrice, toPrice, 1);
+  } else {
+    // 🚨 关键修复：当无法通过上述规则计算时，保留原始价格，而不是置零！
+    console.warn(`⚠️ 订单 ${orderId} 的班次“${newItem.name}”无法匹配价格规则，将保留原价 ${originalPrice} 元。数据:`, JSON.stringify(newItem));
+    calculatedPrice = originalPrice; // 保留原价，避免误清零
+  }
+  
+  // 3. 应用新计算的价格
+  newItem.price = calculatedPrice;
+  
+  // 4. 记录价格变化
+  if (originalPrice !== calculatedPrice) {
+    console.log(`  🔄 价格变化: ${originalPrice}元 -> ${calculatedPrice}元 (班次: ${newItem.name})`);
+  }
+  
+  return newItem;
+});
     
     const newTotal = calculateTotal(recalculatedCarList);
     
