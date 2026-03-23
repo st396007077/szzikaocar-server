@@ -1,7 +1,7 @@
 {
   "name": "zikaocar-server",
   "version": "1.0.0",
-  "description": "山青院自考本科考试专车订单管理系统后端",
+  "description": "商职自考本科考试专车订单管理系统后端",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
