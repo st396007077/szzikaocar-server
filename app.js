@@ -369,6 +369,18 @@ app.post('/api/updateCarItem', async (req, res) => {
   }
 });
 
+app.get('/debug-db', (req, res) => {
+  const uri = process.env.MONGODB_URI;
+  // 安全地显示连接信息（隐藏密码）
+  const maskedUri = uri.replace(/:(.*?)@/, ':****@');
+  res.json({
+    message: '当前数据库连接信息',
+    database: maskedUri,
+    // 或者只提取数据库名
+    databaseName: uri.split('/').pop().split('?')[0]
+  });
+});
+
 // ====================== 🔥 新增：数据库修复接口（临时使用） ======================
 // ⚠️ 警告：此接口仅供一次性修复使用，修复完成后请立即从代码中删除
 // app.post('/api/fixDatabaseManualFlags', async (req, res) => {
