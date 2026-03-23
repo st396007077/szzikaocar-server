@@ -286,48 +286,19 @@ app.post('/api/recalculateAmount', async (req, res) => {
       return res.json({ code: -1, msg: '密码错误' });
     }
 
-    // 查找订单（兼容ID格式，不动逻辑）
-    const order = await Order.findOne({ 
-      $or: [{ orderId: orderId }, { _id: orderId }]
-    });
+    const order = await Order.findOne({ orderId });
     if (!order) {
       return res.json({ code: -1, msg: '订单不存在' });
     }
-
-    // 🔥 核心修复：完全复用项目已有的、正确的价格计算逻辑
-    // 与提交订单、修改订单使用完全相同的代码，保证金额一致
-    const validatedCarList = (order.carList || []).map(item => {
-      const newItem = { ...item };
-      // 以下代码 1:1 复制自你正常工作的 submitOrder/updateOrder 接口
-      if (newItem.price === undefined || newItem.price === null) {
-        if (newItem.name && newItem.name.includes('中午考点更换')) {
-          newItem.price = 1;
-        } else if (newItem.school && SCHOOL_PRICE.hasOwnProperty(newItem.school)) {
-          newItem.price = SCHOOL_PRICE[newItem.school];
-        } else if (newItem.from && newItem.to) {
-          const fromPrice = SCHOOL_PRICE[newItem.from] || 0;
-          const toPrice = SCHOOL_PRICE[newItem.to] || 0;
-          newItem.price = Math.max(fromPrice, toPrice, 1);
-        } else {
-          newItem.price = 0;
-        }
-      }
-      return newItem;
-    });
-
-    // 🔥 复用已验证正确的总金额计算函数
-    const newTotal = calculateTotal(validatedCarList);
-
-    // 更新订单
-    order.carList = validatedCarList;
+    const newTotal = calculateTotal(order.carList);
+    
+    // 重新计算金额时，保持原有的手动修改状态
+    const originalIsManuallyModified = order.isManuallyModified;
     order.total = newTotal;
+    order.isManuallyModified = originalIsManuallyModified;
+    
     await order.save();
-
-    res.json({ 
-      code: 0, 
-      msg: `金额刷新成功，新金额：${newTotal}元`,
-      newTotal: newTotal
-    });
+    res.json({ code: 0, msg: `金额刷新成功，新金额：${newTotal}元` });
   } catch (err) {
     console.error('刷新金额失败:', err);
     res.json({ code: -1, msg: '刷新金额失败' });
